@@ -191,3 +191,6 @@ if uploaded_file and column_name:
                 mime="application/zip",
                 use_container_width=True
             )
+
+            # Add this at the very bottom of app.py for Vercel detection
+app = st
