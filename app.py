@@ -1,7 +1,6 @@
 import os
 import re
 import io
-import time
 import zipfile
 import requests
 import pandas as pd
@@ -70,7 +69,7 @@ def remove_white_bg(img):
     datas = img.getdata()
     newData = []
     for item in datas:
-        if item[0] > 230 and item[1] > 230 and item[2] > 230:
+        if item[0] > 235 and item[1] > 235 and item[2] > 235:
             newData.append((255, 255, 255, 0))
         else:
             newData.append(item)
@@ -78,34 +77,23 @@ def remove_white_bg(img):
     return img
 
 def fetch_clean_image(dish_name):
-    headers = {"User-Agent": "Mozilla/5.0"}
-    # Primary: Unsplash API
     url = f"https://api.unsplash.com/search/photos?query={dish_name} food isolated&per_page=1&client_id={UNSPLASH_ACCESS_KEY}"
     try:
-        res = requests.get(url, headers=headers, timeout=8).json()
-        if res.get("results") and len(res["results"]) > 0:
+        res = requests.get(url, timeout=8).json()
+        if res.get("results"):
+            # 'regular' size is ultra-fast to download while retaining HD quality
             img_url = res["results"][0]["urls"]["regular"]
-            img_res = requests.get(img_url, headers=headers, timeout=12)
-            if img_res.status_code == 200:
-                return Image.open(io.BytesIO(img_res.content))
+            img_res = requests.get(img_url, timeout=10)
+            return Image.open(io.BytesIO(img_res.content))
     except Exception:
         pass
-
-    # Fallback: Backup Unsplash Source Endpoint
-    try:
-        fallback_url = f"https://source.unsplash.com/featured/800x800/?{dish_name},food"
-        fallback_res = requests.get(fallback_url, headers=headers, timeout=8)
-        if fallback_res.status_code == 200:
-            return Image.open(io.BytesIO(fallback_res.content))
-    except Exception:
-        pass
-
     return None
 
 def process_single_dish(item):
     index, raw_dish, bg_opt, chosen_fmt, size_enabled, target_w, target_h = item
     clean_dish = re.sub(r'[\(\[\{].*?[\)\]\}]', '', str(raw_dish)).strip()
     safe_filename = re.sub(r'[\\/*?:"<>|]', "", clean_dish)
+    output_dir = "downloaded_dishes_output"
     
     is_transparent = "Transparent" in bg_opt
     ext = chosen_fmt.lower()
@@ -113,6 +101,7 @@ def process_single_dish(item):
         ext = "png"
         
     final_filename = f"{safe_filename}.{ext}"
+    local_save_path = os.path.join(output_dir, final_filename)
     file_bytes = None
     
     input_img = fetch_clean_image(clean_dish)
@@ -137,15 +126,16 @@ def process_single_dish(item):
             
             save_format = "PNG" if ext == "png" else ("WEBP" if ext == "webp" else "JPEG")
             
-            buf = io.BytesIO()
             if save_format == "JPEG":
                 final_img = final_img.convert('RGB')
-                final_img.save(buf, format="JPEG", quality=90)
+                final_img.save(local_save_path, 'JPEG', quality=95)
             elif save_format == "WEBP":
-                final_img.save(buf, format="WEBP", quality=90)
+                final_img.save(local_save_path, 'WEBP', quality=95)
             else:
-                final_img.save(buf, format="PNG")
-                
+                final_img.save(local_save_path, 'PNG', compress_level=1)
+            
+            buf = io.BytesIO()
+            final_img.save(buf, format=save_format if save_format != "JPEG" else "JPEG", quality=95)
             file_bytes = buf.getvalue()
         except Exception:
             pass
@@ -156,51 +146,55 @@ st.divider()
 
 if uploaded_file and column_name:
     if st.button("🚀 START CLEAN BULK PROCESSING"):
-        progress_bar = st.progress(0)
-        status_text = st.empty()
-        
-        m_col1, m_col2 = st.columns(2)
-        with m_col1:
-            metric_progress = st.metric("Processing Status", "0%")
-        with m_col2:
-            metric_count = st.metric("Dishes Processed", f"0 / {len(df)}")
+        if UNSPLASH_ACCESS_KEY == "YOUR_UNSPLASH_ACCESS_KEY_HERE":
+            st.error("Please add your Unsplash Access Key in the code first!")
+        else:
+            output_dir = "downloaded_dishes_output"
+            os.makedirs(output_dir, exist_ok=True)
             
-        items = [(i, row[column_name], bg_option, file_format, use_custom_size, width, height) for i, row in df.iterrows()]
-        total_items = len(items)
-        completed = 0
-        processed_files = []
-
-        # Safe Thread Pool to prevent API blocking
-        with ThreadPoolExecutor(max_workers=3) as executor:
-            futures = [executor.submit(process_single_dish, item) for item in items]
-            for future in futures:
-                dish_name, fname, fbytes = future.result()
-                completed += 1
-                if fbytes:
-                    processed_files.append((fname, fbytes))
+            m_col1, m_col2 = st.columns(2)
+            with m_col1:
+                metric_progress = st.metric("Processing Status", "0%")
+            with m_col2:
+                metric_count = st.metric("Dishes Downloaded", f"0 / {len(df)}")
                 
-                pct = int((completed / total_items) * 100)
-                progress_bar.progress(completed / total_items)
-                metric_progress.metric("Processing Status", f"{pct}%")
-                metric_count.metric("Dishes Processed", f"{completed} / {total_items}")
-                status_text.write(f"⚡ **[{completed}/{total_items}] Processed:** `{dish_name}`")
+            progress_bar = st.progress(0)
+            status_text = st.empty()
+            
+            items = [(i, row[column_name], bg_option, file_format, use_custom_size, width, height) for i, row in df.iterrows()]
+            total_items = len(items)
+            completed = 0
+            processed_files = []
+            
+            # Boosted to 10 workers for maximum turbo speed!
+            with ThreadPoolExecutor(max_workers=10) as executor:
+                futures = [executor.submit(process_single_dish, item) for item in items]
+                for future in futures:
+                    dish_name, fname, fbytes = future.result()
+                    completed += 1
+                    if fbytes:
+                        processed_files.append((fname, fbytes))
+                    
+                    pct = int((completed / total_items) * 100)
+                    progress_bar.progress(completed / total_items)
+                    metric_progress.metric("Processing Status", f"{pct}%")
+                    metric_count.metric("Dishes Downloaded", f"{completed} / {total_items}")
+                    status_text.write(f"⚡ **[{completed}/{total_items}] Clean Photo Processed:** `{dish_name}`")
 
-        if processed_files:
             zip_buffer = io.BytesIO()
             with zipfile.ZipFile(zip_buffer, "w", zipfile.ZIP_DEFLATED) as zip_file:
                 for filename, data in processed_files:
                     zip_file.writestr(filename, data)
-            zip_bytes = zip_buffer.getvalue()
+            
+            final_zip_data = zip_buffer.getvalue()
 
             st.balloons()
-            st.success(f"🎉 Successfully downloaded {len(processed_files)} out of {total_items} images!")
+            st.success("🎉 All photos processed clean without text or watermarks!")
             
             st.download_button(
                 label=f"📦 DOWNLOAD CLEAN IMAGES ({file_format} ZIP)",
-                data=zip_bytes,
+                data=final_zip_data,
                 file_name=f"Clean_Food_Images_{file_format}.zip",
                 mime="application/zip",
                 use_container_width=True
             )
-        else:
-            st.error("❌ Could not fetch any images. Please check dish names or try again!")
