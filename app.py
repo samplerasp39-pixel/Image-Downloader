@@ -6,10 +6,8 @@ import requests
 import pandas as pd
 import streamlit as st
 from PIL import Image, ImageOps
-from rembg import remove, new_session
 from concurrent.futures import ThreadPoolExecutor
 
-# ENTER YOUR UNSPLASH ACCESS KEY HERE
 UNSPLASH_ACCESS_KEY = "WLzbMAOwEP-iprTCO9Jt2JH0C04qAZ3bWlujuo_6_FY"
 
 st.set_page_config(page_title="Watermark-Free HD Food Downloader", page_icon="⚡", layout="wide")
@@ -39,12 +37,6 @@ st.write("✨ **Zero Watermarks & Zero Text guaranteed via Unsplash API**")
 
 st.divider()
 
-@st.cache_resource
-def load_rembg_session():
-    return new_session('u2net')
-
-rembg_session = load_rembg_session()
-
 col_left, col_right = st.columns([1, 1], gap="large")
 
 with col_left:
@@ -61,7 +53,7 @@ with col_left:
 with col_right:
     st.markdown('<div class="css-card">', unsafe_allow_html=True)
     st.subheader("⚙️ 2. Export Settings")
-    bg_option = st.radio("Background Mode:", ["1. Normal HD Photo", "2. Transparent Cutout (Food Only)"])
+    bg_option = st.radio("Background Mode:", ["1. Normal HD Photo", "2. Transparent Cutout (White BG Removal)"])
     file_format = st.selectbox("Select Output Format:", ["JPG", "PNG", "WEBP"])
     st.write("---")
     use_custom_size = st.checkbox("Enable Custom Resolution?", value=True)
@@ -72,8 +64,20 @@ with col_right:
         height = st.number_input("Height (Pixels)", value=1000, step=100) if use_custom_size else None
     st.markdown('</div>', unsafe_allow_html=True)
 
+def remove_white_bg(img):
+    img = img.convert("RGBA")
+    datas = img.getdata()
+    newData = []
+    for item in datas:
+        if item[0] > 235 and item[1] > 235 and item[2] > 235:
+            newData.append((255, 255, 255, 0))
+        else:
+            newData.append(item)
+    img.putdata(newData)
+    return img
+
 def fetch_clean_image(dish_name):
-    url = f"https://api.unsplash.com/search/photos?query={dish_name} food&per_page=1&client_id={UNSPLASH_ACCESS_KEY}"
+    url = f"https://api.unsplash.com/search/photos?query={dish_name} food isolated&per_page=1&client_id={UNSPLASH_ACCESS_KEY}"
     try:
         res = requests.get(url, timeout=10).json()
         if res.get("results"):
@@ -103,13 +107,13 @@ def process_single_dish(item):
     
     if input_img:
         try:
-            input_img = input_img.convert('RGBA' if (is_transparent or ext in ['png', 'webp']) else 'RGB')
-            
             if is_transparent:
-                input_img = remove(input_img, session=rembg_session)
+                input_img = remove_white_bg(input_img)
                 bbox = input_img.getbbox()
                 if bbox:
                     input_img = input_img.crop(bbox)
+            else:
+                input_img = input_img.convert('RGB')
             
             if size_enabled and target_w and target_h:
                 if is_transparent:
@@ -191,6 +195,3 @@ if uploaded_file and column_name:
                 mime="application/zip",
                 use_container_width=True
             )
-
-            # Add this at the very bottom of app.py for Vercel detection
-app = st
